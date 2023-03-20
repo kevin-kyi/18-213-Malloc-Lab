@@ -107,33 +107,17 @@ typedef struct block {
     word_t header;
 
     /**
-     * @brief A pointer to the block payload.
-     *
-     * TODO: feel free to delete this comment once you've read it carefully.
-     * We don't know what the size of the payload will be, so we will declare
-     * it as a zero-length array, which is a GCC compiler extension. This will
-     * allow us to obtain a pointer to the start of the payload.
-     *
-     * WARNING: A zero-length array must be the last element in a struct, so
-     * there should not be any struct fields after it. For this lab, we will
-     * allow you to include a zero-length array in a union, as long as the
-     * union is the last field in its containing struct. However, this is
-     * compiler-specific behavior and should be avoided in general.
-     *
-     * WARNING: DO NOT cast this pointer to/from other types! Instead, you
-     * should use a union to alias this zero-length array with another struct,
-     * in order to store additional types of data in the payload memory.
-     */
+     @brief A pointer to the block payload.
+     * */
     union {
         struct {
-            struct block_t *explicit_next;
-            struct block_t *explicit_prev;
+            struct block *explicit_next;
+            struct block *explicit_prev;
 
-        };
+        }fb;
+        char payload[0];
     };
 
-
-    char payload[0];
 
     /*
      * TODO: delete or replace this comment once you've thought about it.
@@ -412,27 +396,35 @@ static block_t *find_prev(block_t *block) {
 
 //Explicit List Implementation Helpers
 static void explicitRemove(block_t *block){
-    dgb_requires(block != NULL);
+    block_t *left;
+    block_t *right;
+
+    left = block->fb.explicit_prev;
+    right = block->fb.explicit_next;
+
     bool leftNull = 0;
     bool rightNull = 0;
-    if (block->explicit_next == NULL) rightNull = 1;
-    if (block->explicit_prev == NULL) leftNull = 1;
-    // case 1: 
+
+    if (left == NULL) leftNull = 1;
+    if (right == NULL) rightNull = 1;
+
+    //case 1:
     if (leftNull && rightNull) exp_start = NULL;
-    
-    // case 2:
-    if (leftNull && !rightNull){
-        exp_start = exp_start->explicit_next;
-        exp_start->explicit_next = NULL;
+
+    //case 2:
+    if (leftNull && !rightNull) {
+        exp_start = exp_start->fb.explicit_next;
+        exp_start->fb.explicit_next = NULL;
     }
 
-    // case 3:
-    if (!leftNull && rightNull) block->explicit_prev->explicit
+    //case 3:
+    if (!leftNull && rightNull) block->fb.explicit_prev->fb.explicit_next = NULL;
 
-    // case 4: switch pointers of the left right blocks
+    //case 4:
     if (!leftNull && !rightNull){
-        block->explicit_next->explicit_prev = block->explicit_prev;
-        block->explicit_prev->explicit_next = block->explicit_next;
+        block->fb.explicit_next->fb.explicit_prev = block->fb.explicit_prev;
+        block->fb.explicit_prev->fb.explicit_next = block->fb.explicit_next;
+
     }
 }
 
@@ -440,13 +432,13 @@ static void explicitRemove(block_t *block){
 static void explicitInsert(block_t *block){
     if (exp_start == NULL){
         exp_start = block;
-        exp_start->explicit_next = NULL;
-        exp_start->explicit_prev = NULL;
+        exp_start->fb.explicit_next = NULL;
+        exp_start->fb.explicit_prev = NULL;
     }
     if (exp_start != NULL){
-        exp_start->explicit_prev = block;
-        block->explicit_next = explicit_prev;
-        block->explicit_prev = NULL;
+        exp_start->fb.explicit_prev = block;
+        block->fb.explicit_next = block->fb.explicit_prev;
+        block->fb.explicit_prev = NULL;
         exp_start = block;
     }
 }
@@ -534,14 +526,6 @@ static block_t *extend_heap(size_t size) {
     if ((bp = mem_sbrk(size)) == (void *)-1) {
         return NULL;
     }
-
-    /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Think about what bp represents. Why do we write the new block
-     * starting one word BEFORE bp, but with the same size that we
-     * originally requested?
-     */
-
     // Initialize free block header/footer
     block_t *block = payload_to_header(bp);
     write_block(block, size, false);
