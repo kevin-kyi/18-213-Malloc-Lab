@@ -16,7 +16,7 @@
  *
  *************************************************************************
  *
- * @author Your Name <andrewid@andrew.cmu.edu>
+ * @author Kevin Kyi <kwkyi@andrew.cmu.edu>
  */
 
 #include <assert.h>
@@ -410,23 +410,56 @@ static block_t *find_prev(block_t *block) {
  * @param[in] block
  * @return
  */
+
+// Constant time Coalescing cases
+// case 1: |allocated, block to be freed, allocated|
+//       - free block and reset the header footer
+// case 2: |allocated, block to be freed, free|
+//       - free block and combine with other lower free block
+// case 3: |free, block to be freed, allocated|
+//       - free block and combine with other upper free block
+// case 4: |free, block to be freed, free|
+//       - free block and combine with other two free blocks
+
 static block_t *coalesce_block(block_t *block) {
-    /*
-     * TODO: delete or replace this comment once you're done.
-     *
-     * Before you start, it will be helpful to review the "Dynamic Memory
-     * Allocation: Basic" lecture, and especially the four coalescing
-     * cases that are described.
-     *
-     * The actual content of the function will probably involve a call to
-     * find_prev(), and multiple calls to write_block(). For examples of how
-     * to use write_block(), take a look at split_block().
-     *
-     * Please do not reference code from prior semesters for this, including
-     * old versions of the 213 website. We also discourage you from looking
-     * at the malloc code in CS:APP and K&R, which make heavy use of macros
-     * and which we no longer consider to be good style.
-     */
+    if (block == NULL)
+        return block;
+    size_t blockSize = get_size(block);
+    size_t leftBlockSize = 0;
+    size_t rightBlockSize = 0;
+
+    // check: if first block
+    bool leftAlloc = 1;
+    bool rightAlloc = get_alloc(find_next(block));
+    if (find_prev(block) != NULL)
+        leftAlloc = get_alloc(find_prev(block));
+    if (!rightAlloc)
+        rightBlockSize = get_size(find_next(block));
+    if (!leftAlloc)
+        leftBlockSize = get_size(find_prev(block));
+
+    // case 1: |allocated, block to be freed, allocated|
+    if (leftAlloc && rightAlloc)
+        write_block(block, blockSize, false);
+
+    // case 2: |allocated, block to be freed, free|
+    if (leftAlloc && !rightAlloc) {
+        write_block(block, (blockSize + rightBlockSize), false);
+    }
+
+    // case 3: |free, block to be freed, allocated|
+    block_t *prev = find_prev(block);
+    if (!leftAlloc && rightAlloc) {
+        write_block(prev, (blockSize + leftBlockSize), false);
+        return prev;
+    }
+
+    // case 4: |free, block to be freed, free|
+    if (!leftAlloc && !rightAlloc) {
+        write_block(prev, (blockSize + leftBlockSize + rightBlockSize), false);
+        return prev;
+    }
+
     return block;
 }
 
@@ -533,19 +566,96 @@ static block_t *find_fit(size_t asize) {
  * @param[in] line
  * @return
  */
+
+// mm_checkheap(int line) fucntion requirements
+// 1. check epi/pro blocks: that that there are no blocks that have a size = 0
+// and allocated = 1 (no empty alloc blocks)
+// 2. check alignment: check that all the total block size are factors of 16
+// 3. check addresses: make sure that all the addy's are within the "heap
+// boundary limits" of possible addy's
+// 4. check size: make sure that the blocks sizes are above the min alloc'd
+// block size
+// - check that the footer and the header are the same size
+// 5. check coalesce: make sure that there are no consequtive free blocks on the
+// list
+
+// checking that start and end blocks are correct
+bool checkStartEnd() {
+    block_t *prologueBlock = (block_t *)((char *)mem_heap_lo());
+    block_t *epilogueBlock = (block_t *)((char *)mem_heap_hi() - 7);
+
+    // check: size = 0
+    if (get_size(prologueBlock) != 0 || get_size(epilogueBlock) != 0) {
+        printf("Error(checkHeap case 1): size != 0 \n");
+        return false;
+    }
+    // check: alloc = 1
+    if (get_alloc(prologueBlock) != 1 || get_alloc(epilogueBlock) != 1) {
+        printf("Error(checkHeap case 1): alloc != 1 \n");
+        return false;
+    }
+    return true;
+}
+// checking that each block is aligned
+bool checkAlignment(block_t *startBlock) {
+
+    if ((get_size(startBlock) % 16) != 0) {
+        printf("Error(checkHeap case 2): Block not aligned \n");
+        return false;
+    }
+    return true;
+}
+// checking if address is within range of valid addresses
+bool checkAddresses(block_t *startBlock) {
+    block_t *prologueBlock = (block_t *)((char *)mem_heap_lo());
+    block_t *epilogueBlock = (block_t *)((char *)mem_heap_hi() - 7);
+
+    if (prologueBlock > startBlock) {
+        printf("Error(checkHeap case 3): Address is too big \n");
+        return false;
+    }
+    if (epilogueBlock < startBlock) {
+        printf("Error(checkHeap case 3): Address is too small \n");
+        return false;
+    }
+
+    return true;
+}
+// checking that size is more than min and header == footer
+bool checkBlockSize(block_t *startBlock) {
+    // if (get_size(startBlock) % 16 != 0) return false;
+
+    if (get_size(startBlock) < min_block_size) {
+        printf("Error(checkHeap case 4): block size too small \n");
+        return false;
+    }
+    if (startBlock->header != *(header_to_footer(startBlock))) {
+        printf("Error(checkHeap case 4): invalid header and footer \n");
+        return false;
+    }
+    return true;
+}
+// checking if you need to coalesce free blocks
+bool checkCoalescing(block_t *startBlock) {
+
+    if (get_alloc(startBlock) == 0 && get_alloc(find_next(startBlock)) == 0) {
+        printf("Error(checkHeap case 5): coalesce \n");
+        return false;
+    }
+
+    return true;
+}
+
 bool mm_checkheap(int line) {
-    /*
-     * TODO: Delete this comment!
-     *
-     * You will need to write the heap checker yourself.
-     * Please keep modularity in mind when you're writing the heap checker!
-     *
-     * As a filler: one guacamole is equal to 6.02214086 x 10**23 guacas.
-     * One might even call it...  the avocado's number.
-     *
-     * Internal use only: If you mix guacamole on your bibimbap,
-     * do you eat it with a pair of chopsticks, or with a spoon?
-     */
+    block_t *firstBlock = heap_start;
+    checkStartEnd();
+
+    for (block_t *tmp = firstBlock; get_size(tmp) != 0; tmp = find_next(tmp)) {
+        checkAlignment(tmp);
+        checkAddresses(tmp);
+        checkBlockSize(tmp);
+        checkCoalescing(tmp);
+    }
 
     return true;
 }
