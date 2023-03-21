@@ -105,26 +105,14 @@ static const word_t size_mask = ~(word_t)0xF;
 typedef struct block {
     /** @brief Header contains size + allocation flag */
     word_t header;
-
-    /**
-     @brief A pointer to the block payload.
-     * */
     union {
         struct {
             struct block *explicit_next;
             struct block *explicit_prev;
 
-        }fb;
+        } fb;
         char payload[0];
     };
-
-
-    /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Why can't we declare the block footer here as part of the struct?
-     * Why do we even have footers -- will the code work fine without them?
-     * which functions actually use the data contained in footers?
-     */
 } block_t;
 
 /* Global variables */
@@ -132,7 +120,6 @@ typedef struct block {
 /** @brief Pointer to first block in the heap */
 static block_t *heap_start = NULL;
 static block_t *exp_start = NULL;
-
 
 /*
  *****************************************************************************
@@ -213,6 +200,7 @@ static size_t extract_size(word_t word) {
  * @return The size of the block
  */
 static size_t get_size(block_t *block) {
+    dbg_requires(block != NULL);
     return extract_size(block->header);
 }
 
@@ -234,6 +222,7 @@ static block_t *payload_to_header(void *bp) {
  * @pre The block must be a valid block, not a boundary tag.
  */
 static void *header_to_payload(block_t *block) {
+    dbg_requires(block != NULL);
     dbg_requires(get_size(block) != 0);
     return (void *)(block->payload);
 }
@@ -380,10 +369,36 @@ static block_t *find_prev(block_t *block) {
 
     // Return NULL if called on first block in the heap
     if (extract_size(*footerp) == 0) {
-        return NULL;
+        return mem_heap_lo();
     }
 
     return footer_to_header(footerp);
+}
+
+void print_heap(int line) {
+    block_t *block;
+    int a;
+    dbg_printf("\n*************************\n");
+    dbg_printf("\n HEAP PRINT:\n");
+    dbg_printf("PROLOGUE: %p\n", mem_heap_lo());
+    dbg_printf("=======================\n");
+    for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
+        dbg_printf("=======================\n");
+        dbg_printf("Address: %p : \n", block);
+        a = get_alloc(block) ? 1 : 0;
+        dbg_printf("Allocation status: %d\n", a);
+        dbg_printf("Size: %lu\n", get_size(block));
+        block_t *blk = find_prev(block);
+        dbg_printf("Prev Block: %p\n", blk);
+        a = get_alloc(blk) ? 1 : 0;
+        dbg_printf("Prev_Alloc status: %d\n", a);
+    }
+    dbg_printf("=======================\n");
+    int epilogue = (int)((char *)mem_heap_hi() - 7);
+    dbg_printf("EPILOGUE: %x", epilogue);
+
+    dbg_printf("\n*************************\n");
+    return;
 }
 
 /*
@@ -394,56 +409,50 @@ static block_t *find_prev(block_t *block) {
 
 /******** The remaining content below are helper and debug routines ********/
 
-//Explicit List Implementation Helpers
-static void explicitRemove(block_t *block){
-    block_t *left;
-    block_t *right;
+// Explicit List Implementation Helpers
+static void explicitRemove(block_t *block) {
+    // Case 1: root == NULL -> return;
+    // Case 2: free list length 1 -> return root = NULL;
+    //     root->next == NULL and root->prev == NULL
 
-    left = block->fb.explicit_prev;
-    right = block->fb.explicit_next;
+    // Case 3: free list length > 1:
+    //     is root == block? yes -> root = root->prev
+    //     switch block pointers:
+    //         block->prev->next = block->next
+    //         block->next->prev = block->prev
+    // return;
 
-    bool leftNull = 0;
-    bool rightNull = 0;
-
-    if (left == NULL) leftNull = 1;
-    if (right == NULL) rightNull = 1;
-
-    //case 1:
-    if (leftNull && rightNull) exp_start = NULL;
-
-    //case 2:
-    if (leftNull && !rightNull) {
-        exp_start = exp_start->fb.explicit_next;
-        exp_start->fb.explicit_next = NULL;
-    }
-
-    //case 3:
-    if (!leftNull && rightNull) block->fb.explicit_prev->fb.explicit_next = NULL;
-
-    //case 4:
-    if (!leftNull && !rightNull){
-        block->fb.explicit_next->fb.explicit_prev = block->fb.explicit_prev;
+    if (exp_start == NULL)
+        return;
+    if (exp_start->fb.explicit_next == exp_start &&
+        exp_start->fb.explicit_prev == exp_start) {
+        exp_start = NULL;
+        return;
+    } else {
+        if (exp_start == block)
+            exp_start = exp_start->fb.explicit_next;
         block->fb.explicit_prev->fb.explicit_next = block->fb.explicit_next;
-
+        block->fb.explicit_next->fb.explicit_prev = block->fb.explicit_prev;
     }
 }
 
+static void explicitInsert(block_t *block) {
+    dbg_requires(block != NULL);
+    dbg_requires(!get_alloc(block));
+    dbg_requires(get_size(block) > 0);
 
-static void explicitInsert(block_t *block){
-    if (exp_start == NULL){
+    // exp list is empty
+    if (exp_start == NULL) {
+        block->fb.explicit_prev = block;
+        block->fb.explicit_next = block;
         exp_start = block;
-        exp_start->fb.explicit_next = NULL;
-        exp_start->fb.explicit_prev = NULL;
-    }
-    if (exp_start != NULL){
-        exp_start->fb.explicit_prev = block;
-        block->fb.explicit_next = block->fb.explicit_prev;
-        block->fb.explicit_prev = NULL;
-        exp_start = block;
+    } else {
+        exp_start->fb.explicit_next->fb.explicit_prev = block;
+        block->fb.explicit_next = exp_start->fb.explicit_next;
+        exp_start->fb.explicit_next = block;
+        block->fb.explicit_prev = exp_start;
     }
 }
-
-
 
 /**
  * @brief
@@ -457,52 +466,72 @@ static void explicitInsert(block_t *block){
  * @return
  */
 
-//Constant time Coalescing cases
-//case 1: |allocated, block to be freed, allocated|
+// Constant time Coalescing cases
+// case 1: |allocated, block to be freed, allocated|
 //       - free block and reset the header footer
-//case 2: |allocated, block to be freed, free|
+// case 2: |allocated, block to be freed, free|
 //       - free block and combine with other lower free block
-//case 3: |free, block to be freed, allocated|
+// case 3: |free, block to be freed, allocated|
 //       - free block and combine with other upper free block
-//case 4: |free, block to be freed, free|
+// case 4: |free, block to be freed, free|
 //       - free block and combine with other two free blocks
 
-
 static block_t *coalesce_block(block_t *block) {
-    if (block == NULL) return block;
+    if (block == NULL)
+        return block;
     size_t blockSize = get_size(block);
     size_t leftBlockSize = 0;
     size_t rightBlockSize = 0;
-
-
-    //check: if first block
+    // check: if first block
     bool leftAlloc = 1;
-    bool rightAlloc =  get_alloc(find_next(block));
-    if (find_prev(block) != NULL) leftAlloc = get_alloc(find_prev(block));
-    if (!rightAlloc) rightBlockSize = get_size(find_next(block));
-    if (!leftAlloc) leftBlockSize = get_size(find_prev(block));
+    bool rightAlloc = get_alloc(find_next(block));
 
+    block_t *pBlock = find_prev(block);
+    block_t *nBlock = find_next(block);
 
-    //case 1: |allocated, block to be freed, allocated|
-    if (leftAlloc && rightAlloc) write_block(block, blockSize, false);
+    if (pBlock != NULL)
+        leftAlloc = get_alloc(pBlock);
+    if (!leftAlloc)
+        leftBlockSize = get_size(pBlock);
 
-    //case 2: |allocated, block to be freed, free|
-    if (leftAlloc && !rightAlloc){
+    if (!rightAlloc)
+        rightBlockSize = get_size(nBlock);
+
+    // case 1: |allocated, block to be freed, allocated|
+    if (leftAlloc && rightAlloc) {
+        write_block(block, blockSize, false);
+        explicitInsert(block);
+    }
+
+    // case 2: |allocated, block to be freed, free|
+    if (leftAlloc && !rightAlloc) {
+        explicitRemove(find_next(block));
         write_block(block, (blockSize + rightBlockSize), false);
+        explicitInsert(block);
     }
 
-    //case 3: |free, block to be freed, allocated|
+    // case 3: |free, block to be freed, allocated|
     block_t *prev = find_prev(block);
-    if (!leftAlloc && rightAlloc){
-        write_block(prev, (blockSize + leftBlockSize), false);
+    if (!leftAlloc && rightAlloc) {
+        explicitRemove(prev);
+        write_block(prev, (leftBlockSize + blockSize), false);
+        explicitInsert(prev);
+        print_heap(__LINE__);
+
         return prev;
     }
 
-    //case 4: |free, block to be freed, free|
-    if (!leftAlloc && !rightAlloc){
+    // case 4: |free, block to be freed, free|
+    if (!leftAlloc && !rightAlloc) {
+        explicitRemove(prev);
+        explicitRemove(find_next(block));
         write_block(prev, (blockSize + leftBlockSize + rightBlockSize), false);
+        explicitInsert(prev);
+        print_heap(__LINE__);
+
         return prev;
     }
+    print_heap(__LINE__);
 
     return block;
 }
@@ -535,7 +564,10 @@ static block_t *extend_heap(size_t size) {
     write_epilogue(block_next);
 
     // Coalesce in case the previous block was free
-    block = coalesce_block(block);
+    if (block != heap_start && get_alloc(find_prev(block)) != 1) {
+        block = coalesce_block(block);
+    } else if (get_alloc(block) == 0)
+        explicitInsert(block);
 
     return block;
 }
@@ -560,9 +592,10 @@ static void split_block(block_t *block, size_t asize) {
     if ((block_size - asize) >= min_block_size) {
         block_t *block_next;
         write_block(block, asize, true);
-
+        explicitRemove(block);
         block_next = find_next(block);
         write_block(block_next, block_size - asize, false);
+        explicitInsert(block_next);
     }
 
     dbg_ensures(get_alloc(block));
@@ -582,8 +615,21 @@ static void split_block(block_t *block, size_t asize) {
 static block_t *find_fit(size_t asize) {
     block_t *block;
 
-    for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
+    if (exp_start == NULL)
+        return NULL;
+    else if (asize <= get_size(exp_start))
+        return exp_start;
 
+    // for (block = exp_start; get_size(block) > 0; block =
+    // block->fb.explicit_next) {
+    //     dbg_printf("findFit call: \n");
+    //     if (!(get_alloc(block)) && (asize <= get_size(block))) {
+    //         return block;
+    //     }
+    // }
+    for (block = exp_start->fb.explicit_next; block != exp_start;
+         block = block->fb.explicit_next) {
+        dbg_printf("findFit call: \n");
         if (!(get_alloc(block)) && (asize <= get_size(block))) {
             return block;
         }
@@ -603,98 +649,91 @@ static block_t *find_fit(size_t asize) {
  * @return
  */
 
-
-
-
-//mm_checkheap(int line) fucntion requirements
-// 1. check epi/pro blocks: that that there are no blocks that have a size = 0 and allocated = 1 (no empty alloc blocks)
+// mm_checkheap(int line) fucntion requirements
+// 1. check epi/pro blocks: that that there are no blocks that have a size = 0
+// and allocated = 1 (no empty alloc blocks)
 // 2. check alignment: check that all the total block size are factors of 16
-// 3. check addresses: make sure that all the addy's are within the "heap boundary limits" of possible addy's
-// 4. check size: make sure that the blocks sizes are above the min alloc'd block size
-    // - check that the footer and the header are the same size 
-// 5. check coalesce: make sure that there are no consequtive free blocks on the list
+// 3. check addresses: make sure that all the addy's are within the "heap
+// boundary limits" of possible addy's
+// 4. check size: make sure that the blocks sizes are above the min alloc'd
+// block size
+// - check that the footer and the header are the same size
+// 5. check coalesce: make sure that there are no consequtive free blocks on the
+// list
 
-//checking that start and end blocks are correct
-bool checkStartEnd(){
-    block_t *prologueBlock = (block_t*)((char*)mem_heap_lo()); 
-    block_t *epilogueBlock = (block_t*)((char*)mem_heap_hi() - 7); 
+// checking that start and end blocks are correct
+bool checkStartEnd() {
+    block_t *prologueBlock = (block_t *)((char *)mem_heap_lo());
+    block_t *epilogueBlock = (block_t *)((char *)mem_heap_hi() - 7);
 
-    //check: size = 0
-    if (get_size(prologueBlock) != 0 || get_size(epilogueBlock) != 0){
+    // check: size = 0
+    if (get_size(prologueBlock) != 0 || get_size(epilogueBlock) != 0) {
         printf("Error(checkHeap case 1): size != 0 \n");
         return false;
     }
-    //check: alloc = 1
-    if (get_alloc(prologueBlock) != 1 || get_alloc(epilogueBlock) != 1){
+    // check: alloc = 1
+    if (get_alloc(prologueBlock) != 1 || get_alloc(epilogueBlock) != 1) {
         printf("Error(checkHeap case 1): alloc != 1 \n");
         return false;
     }
     return true;
 }
-//checking that each block is aligned 
-bool checkAlignment(block_t *startBlock){
-    
-    if ((get_size(startBlock) % 16) != 0){
+// checking that each block is aligned
+bool checkAlignment(block_t *startBlock) {
+
+    if ((get_size(startBlock) % 16) != 0 || (size_t)startBlock % wsize != 0) {
         printf("Error(checkHeap case 2): Block not aligned \n");
         return false;
     }
     return true;
 }
-//checking if address is within range of valid addresses
-bool checkAddresses(block_t *startBlock){
-    block_t *prologueBlock = (block_t*)((char*)mem_heap_lo()); 
-    block_t *epilogueBlock = (block_t*)((char*)mem_heap_hi() - 7); 
-    
-    if (prologueBlock > startBlock){
-        printf("Error(checkHeap case 3): Address is too big \n");
+// checking if address is within range of valid addresses
+bool checkAddresses(block_t *startBlock) {
+    dbg_assert(startBlock != NULL);
+    char *address;
+    address = (char *)startBlock;
+
+    if ((unsigned long)address % wsize != 0)
         return false;
-    }
-    if (epilogueBlock < startBlock){
-        printf("Error(checkHeap case 3): Address is too small \n");
-        return false;
-    }
-    
+
     return true;
 }
-//checking that size is more than min and header == footer
-bool checkBlockSize(block_t *startBlock){
-    //if (get_size(startBlock) % 16 != 0) return false;
+// checking that size is more than min and header == footer
+bool checkBlockSize(block_t *startBlock) {
+    // if (get_size(startBlock) % 16 != 0) return false;
 
-    if(get_size(startBlock) < min_block_size){
+    if (get_size(startBlock) < min_block_size) {
         printf("Error(checkHeap case 4): block size too small \n");
         return false;
     }
-    if(startBlock->header != *(header_to_footer(startBlock))){
+    if (startBlock->header != *(header_to_footer(startBlock))) {
         printf("Error(checkHeap case 4): invalid header and footer \n");
         return false;
-        
     }
-    return true; 
+    return true;
 }
-//checking if you need to coalesce free blocks
-bool checkCoalescing(block_t *startBlock){
+// checking if you need to coalesce free blocks
+bool checkCoalescing(block_t *startBlock) {
 
-    if(get_alloc(startBlock) == 0 && get_alloc(find_next(startBlock)) == 0){
+    if (get_alloc(startBlock) == 0 && get_alloc(find_next(startBlock)) == 0) {
         printf("Error(checkHeap case 5): coalesce \n");
         return false;
     }
-    
+
     return true;
 }
-
 
 bool mm_checkheap(int line) {
     block_t *firstBlock = heap_start;
     checkStartEnd();
 
-
-    for (block_t *tmp = firstBlock; get_size(tmp) != 0; tmp = find_next(tmp)){
+    for (block_t *tmp = firstBlock; get_size(tmp) > 0; tmp = find_next(tmp)) {
         checkAlignment(tmp);
         checkAddresses(tmp);
         checkBlockSize(tmp);
         checkCoalescing(tmp);
     }
-    
+
     return true;
 }
 
@@ -711,6 +750,7 @@ bool mm_checkheap(int line) {
 bool mm_init(void) {
     // Create the initial empty heap
     heap_start = NULL;
+    exp_start = NULL;
     word_t *start = (word_t *)(mem_sbrk(2 * wsize));
 
     if (start == (void *)-1) {
@@ -789,6 +829,7 @@ void *malloc(size_t size) {
 
     // Mark block as allocated
     size_t block_size = get_size(block);
+    explicitRemove(block);
     write_block(block, block_size, true);
 
     // Try to split the block if too large
