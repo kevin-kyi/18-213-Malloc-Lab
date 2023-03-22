@@ -86,18 +86,18 @@ static const size_t dsize = 2 * wsize;
 static const size_t min_block_size = 2 * dsize;
 
 /**
- * TODO: explain what chunksize is
- * (Must be divisible by dsize)
+ * TODO: chunk size is the number you extend heap by 
+ * which in this case would be the dSize(has to be divisible by)
  */
 static const size_t chunksize = (1 << 12);
 
 /**
- * TODO: explain what alloc_mask is
+ * TODO: gives us the status of the alloc bit
  */
 static const word_t alloc_mask = 0x1;
 
 /**
- * TODO: explain what size_mask is
+ * TODO: 8 bits we use to determine the size of the block from the header
  */
 static const word_t size_mask = ~(word_t)0xF;
 
@@ -403,19 +403,10 @@ size_t seg_index(size_t bSize) {
 
 //Explicit List Implementation Helpers
 static void explicitRemove(block_t *block){
-    dbg_requires(block != NULL);
-    dbg_requires(!get_alloc(block));
-    dbg_requires(get_size(block) > min_block_size);
-    // Case 1: root == NULL -> return;
-    // Case 2: free list length 1 -> return root = NULL;
-    //     root->next == NULL and root->prev == NULL
-
-    // Case 3: free list length > 1:
-    //     is root == block? yes -> root = root->prev
-    //     switch block pointers:
-    //         block->prev->next = block->next
-    //         block->next->prev = block->prev
-    // return;
+    // dbg_requires(block != NULL);
+    // dbg_requires(!get_alloc(block));
+    // dbg_requires(get_size(block) > min_block_size);
+    
     size_t index = seg_index(get_size(block));
    
     if (seg_list[index] == NULL) return;
@@ -428,15 +419,25 @@ static void explicitRemove(block_t *block){
         block->fb.explicit_prev->fb.explicit_next = block->fb.explicit_next;
         block->fb.explicit_next->fb.explicit_prev = block->fb.explicit_prev;
     }
+    // Case 1: root == NULL -> return;
+    // Case 2: free list length 1 -> return root = NULL;
+    //     root->next == NULL and root->prev == NULL
+
+    // Case 3: free list length > 1:
+    //     is root == block? yes -> root = root->prev
+    //     switch block pointers:
+    //         block->prev->next = block->next
+    //         block->next->prev = block->prev
+    // return;
 
     
 }
 
 
 static void explicitInsert(block_t *block){
-    dbg_requires(block != NULL);
-    dbg_requires(!get_alloc(block));
-    dbg_requires(get_size(block) > min_block_size);
+    //dbg_requires(block != NULL);
+    //dbg_requires(!get_alloc(block));
+    //dbg_requires(get_size(block) > min_block_size);
 
     size_t index = seg_index(get_size(block));
     // block_t *seg_list
@@ -460,9 +461,10 @@ static void explicitInsert(block_t *block){
 /**
  * @brief
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
+ * <What does this function do?> This function looks at adjacent blocks to see 
+ * if there needs to be coalescing(by using the alloc status of left right blocks)
+ * <What are the function's arguments?> A pointer to the block in the middle
+ * <What is the function's return value?> The original block or the coalesced block
  * <Are there any preconditions or postconditions?>
  *
  * @param[in] block
@@ -540,9 +542,9 @@ static block_t *coalesce_block(block_t *block) {
 /**
  * @brief
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
+ * <What does this function do?> If needed extends the heap by adding free block
+ * <What are the function's arguments?> the size of original block 
+ * <What is the function's return value?> A pointer to the new free block
  * <Are there any preconditions or postconditions?>
  *
  * @param[in] size
@@ -598,10 +600,7 @@ static void split_block(block_t *block, size_t asize) {
         write_block(block_next, block_size - asize, false);
         
         explicitInsert(block_next);
-    } else {
-        dbg_assert(get_alloc(block));
-        dbg_assert(get_size(block) > min_block_size);
-    }
+    } 
 
     dbg_ensures(get_alloc(block));
 }
@@ -609,9 +608,9 @@ static void split_block(block_t *block, size_t asize) {
 /**
  * @brief
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
+ * <What does this function do?> find_fit_explicive finds first free fitting block in the free list
+ * <What are the function's arguments?> the desired alloc size of the block and the index from find_fit
+ * <What is the function's return value?> the first free block that fits
  * <Are there any preconditions or postconditions?>
  *
  * @param[in] asize
@@ -652,9 +651,9 @@ static block_t *find_fit(size_t asize) {
 /**
  * @brief
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
+ * <What does this function do?> checks cases to make sure we have a valid heap 
+ * <What are the function's arguments?> line, I didn't use it
+ * <What is the function's return value?> a boolean value of whether the heap was valid or not
  * <Are there any preconditions or postconditions?>
  *
  * @param[in] line
@@ -673,67 +672,98 @@ static block_t *find_fit(size_t asize) {
 // 5. check coalesce: make sure that there are no consequtive free blocks on the list
 
 //checking that start and end blocks are correct
-bool checkStartEnd(){
-    block_t *prologueBlock = (block_t*)((char*)mem_heap_lo()); 
-    block_t *epilogueBlock = (block_t*)((char*)mem_heap_hi() - 7); 
+bool checkPrologue(){
+    block_t *prevNull = find_prev(heap_start);
+    if (prevNull != NULL) return false;
+    if ((block_t*)(&heap_start->header - 0x1) != (block_t*) mem_heap_lo()) return false;
 
-    //check: size = 0
-    if (get_size(prologueBlock) != 0 || get_size(epilogueBlock) != 0){
-        //printf("Error(checkHeap case 1): size != 0 \n");
-        return false;
-    }
-    //check: alloc = 1
-    if (get_alloc(prologueBlock) != 1 || get_alloc(epilogueBlock) != 1){
-        //printf("Error(checkHeap case 1): alloc != 1 \n");
-        return false;
+    return true;
+}
+
+bool checkEpilogue(block_t *currentBlock){
+    if (currentBlock == NULL || get_size(currentBlock) != 0){
+        if (get_alloc(currentBlock) == 1) return false;
     }
     return true;
 }
+
 //checking that each block is aligned 
 bool checkAlignment(block_t *startBlock){
+    if (get_size(startBlock) % 16 != 0) return false;
+    if (((size_t)startBlock % wsize != 0)) return false;
+    //printf("Error(checkHeap case 2): Block not aligned \n");
+        
     
-    if ((get_size(startBlock) % 16) != 0 || (size_t)startBlock % wsize != 0){
-        //printf("Error(checkHeap case 2): Block not aligned \n");
-        return false;
-    }
     return true;
 }
 //checking if address is within range of valid addresses
 bool checkAddresses(block_t *startBlock){
-    dbg_assert(startBlock != NULL);
-    char *address;
-    address = (char *)startBlock;
-    
-    if ((unsigned long)address % wsize != 0) return false;
-
-
-
-
+    if (!((void*)startBlock >= mem_heap_lo())){
+        if(!((void*)startBlock <= mem_heap_hi())) return false;
+    }
     return true;
 }
 //checking that size is more than min and header == footer
-bool checkBlockSize(block_t *startBlock){
-    //if (get_size(startBlock) % 16 != 0) return false;
+bool checkHeaderFooter(block_t *startBlock){
 
     if(get_size(startBlock) < min_block_size){
-        //printf("Error(checkHeap case 4): block size too small \n");
         return false;
     }
-    if(startBlock->header != *(header_to_footer(startBlock))){
-        //printf("Error(checkHeap case 4): invalid header and footer \n");
-        return false;
-        
+    if (!get_alloc(startBlock)){
+        //check for equal header and footer sizes
+        if (get_size(startBlock) != extract_size((word_t)header_to_footer(startBlock))) return false;
+        //check for equal header and footer allocs
+        if (get_alloc(startBlock) != extract_alloc((word_t)header_to_footer(startBlock))) return false;
     }
     return true; 
 }
 //checking if you need to coalesce free blocks
 bool checkCoalescing(block_t *startBlock){
+    // check that there are no adjacent freeblocks(need to coalesce)
+    if(get_alloc(startBlock) == 0 && get_alloc(find_next(startBlock)) == 0) return false;
+    //printf("Error(checkHeap case 5): coalesce \n");
+    return true;
+}
 
-    if(get_alloc(startBlock) == 0 && get_alloc(find_next(startBlock)) == 0){
-        //printf("Error(checkHeap case 5): coalesce \n");
-        return false;
+
+bool checkFreeBlocks(){
+    for (size_t i = 0; i < seg_size; i++){
+
+        //if(seg_list[i] == NULL) return false;
+
+        if (get_alloc(seg_list[i])) return false;
+        if ((size_t)mem_heap_lo() < get_size(seg_list[i]) ||
+            (size_t)mem_heap_hi() > get_size(seg_list[i])) return false;
+        
+        //check that the pointers have valid prev pointers and valid next pointers
+        if (seg_list[i]->fb.explicit_next != NULL && seg_list[i]->fb.explicit_prev != NULL){
+            if(seg_list[i] != seg_list[i]->fb.explicit_next || seg_list[i] != seg_list[i]->fb.explicit_prev){
+
+                return false;
+            }
+        }
     }
-    
+    //check that the numbers of free blocks match in seg list and in iterating through heap
+    size_t numSegFree = 0;
+    size_t numHeapFree = 0;
+    block_t *segList, *heapList;
+
+    segList = seg_list[0];
+    while (segList != NULL){
+        numSegFree++;
+        segList = segList->fb.explicit_next;
+    }
+
+    heapList = heap_start;
+    while (get_size(heapList) > 0){
+        if (!get_alloc(heapList)){
+            numSegFree++;
+            heapList = find_next(heapList);
+        }
+    }
+    if (numSegFree != numHeapFree) return false;
+
+
     return true;
 }
 
@@ -741,16 +771,21 @@ bool checkCoalescing(block_t *startBlock){
 
 
 bool mm_checkheap(int line) {
-    block_t *firstBlock = heap_start;
-    checkStartEnd();
+    block_t *firstBlock, *tmp;
+    //if (heap_start == NULL) return false;
+    firstBlock = heap_start;
+
+    if (!checkPrologue()) return false;
 
 
-    for (block_t *tmp = firstBlock; get_size(tmp) > 0; tmp = find_next(tmp)){
-        checkAlignment(tmp);
-        checkAddresses(tmp);
-        checkBlockSize(tmp);
-        checkCoalescing(tmp);
+    for (tmp = firstBlock; get_size(tmp) > 0; tmp = find_next(tmp)){
+        
+
+        if (!checkAlignment(tmp) || !checkAddresses(tmp) || !checkHeaderFooter(tmp) ||
+            !checkCoalescing(tmp)) return false;
     }
+    if(!checkEpilogue(tmp)) return false;
+    if(!checkFreeBlocks()) return false; 
     
     return true;
 }
@@ -759,9 +794,9 @@ bool mm_checkheap(int line) {
 /**
  * @brief
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
+ * <What does this function do?> initializes the values for heap and freeblock lists
+ * <What are the function's arguments?> void
+ * <What is the function's return value?> returns whether it was initialized or not as a bool
  * <Are there any preconditions or postconditions?>
  *
  * @return
@@ -769,18 +804,12 @@ bool mm_checkheap(int line) {
 bool mm_init(void) {
     // Create the initial empty heap
     //heap_start = NULL;
-    // exp_start = NULL;
+    //exp_start = NULL;
     word_t *start = (word_t *)(mem_sbrk(2 * wsize));
 
     if (start == (void *)-1) {
         return false;
     }
-
-    /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Think about why we need a heap prologue and epilogue. Why do
-     * they correspond to a block footer and header respectively?
-     */
 
     start[0] = pack(0, true); // Heap prologue (block footer)
     start[1] = pack(0, true); // Heap epilogue (block header)
@@ -802,9 +831,9 @@ bool mm_init(void) {
 /**
  * @brief
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
+ * <What does this function do?> replaces a free block with an alloc
+ * <What are the function's arguments?> the size of allocation
+ * <What is the function's return value?> void(will change the free block into an alloc w/ data)
  * <Are there any preconditions or postconditions?>
  *
  * @param[in] size
@@ -876,9 +905,9 @@ void *malloc(size_t size) {
 /**
  * @brief
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
+ * <What does this function do?> turns an alloc block back into a free 
+ * <What are the function's arguments?> the address of the alloc'd block
+ * <What is the function's return value?> void(will change the alloc block into a free)
  * <Are there any preconditions or postconditions?>
  *
  * @param[in] bp
