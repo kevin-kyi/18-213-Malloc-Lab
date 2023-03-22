@@ -101,6 +101,9 @@ static const word_t alloc_mask = 0x1;
  */
 static const word_t size_mask = ~(word_t)0xF;
 
+static const size_t seg_size = 10;
+
+
 /** @brief Represents the header and payload of one block in the heap */
 typedef struct block {
     /** @brief Header contains size + allocation flag */
@@ -120,6 +123,7 @@ typedef struct block {
 /** @brief Pointer to first block in the heap */
 static block_t *heap_start = NULL;
 static block_t *exp_start = NULL;
+static block_t *seg_list[seg_size];
 
 
 /*
@@ -398,7 +402,7 @@ void print_heap(int line) {
     int epilogue = (int) ((char*)mem_heap_hi() - 7);
     dbg_printf("EPILOGUE: %x", epilogue);
 
-    dbg_printf("\n*************************\n");
+    dbg_printf("\n*************************\n\n\n\n");
     return;
 }
 
@@ -410,40 +414,91 @@ void print_heap(int line) {
 
 /******** The remaining content below are helper and debug routines ********/
 
+
+static size_t seg_index(size_t bSize){
+    dbg_assert(bSize >= min_block_size);
+    size_t i, exp;
+    exp = 5;
+
+    for (i=0; i < seg_size; i++){
+        if ((1 << (exp + i)) >= bSize){
+            if ((1 << (exp + i + 1)) >= bSize){
+                return i;
+            }
+        }
+    }
+    return seg_size - 1;
+
+}
+
+
 //Explicit List Implementation Helpers
 static void explicitRemove(block_t *block){
-    // Case 1: root == NULL -> return;
-    // Case 2: free list length 1 -> return root = NULL;
-    //     root->next == NULL and root->prev == NULL
+    dbg_assert(block != NULL);
 
-    // Case 3: free list length > 1:
-    //     is root == block? yes -> root = root->prev
-    //     switch block pointers:
-    //         block->prev->next = block->next
-    //         block->next->prev = block->prev
-    // return;
+    block_t *temp = block;
 
+    size_t bSize = get_size(temp);
+    size_t index = seg_index(bSize);
 
-    if (exp_start == NULL) return;
-    if (exp_start->fb.explicit_next == exp_start && exp_start->fb.explicit_prev == exp_start){
+    dbg_printf("explicitRemove: \n");
+    print_heap(__LINE__);
+
+    //Case 1: root == NULL -> return;
+    if (seg_list[index] == NULL) return;
+    //Case 2:if there is only one elem in free list
+    if (exp_start->fb.explicit_next == exp_start && 
+        exp_start->fb.explicit_prev == exp_start){
         exp_start = NULL;
+        seg_list[index] = exp_start;
         return;
     }
+    //Case 3: regular insertion
     else{
+        //Extra case: if we want to remove the first elem we can just switch pointer
         if (exp_start == block) exp_start = exp_start->fb.explicit_next;
+        //normal case of switching pointers: 
+        //block->prev->next = block->next
         block->fb.explicit_prev->fb.explicit_next = block->fb.explicit_next;
+        //block->next->prev = block->prev
         block->fb.explicit_next->fb.explicit_prev = block->fb.explicit_prev;
-
+        seg_list[index] = exp_start;
     }
-
     
+    
+
+    //EXPLICIT IMPLEMENTATION:
+    // //Case 1: root == NULL -> return;
+    // if (exp_start == NULL) return;
+    // //Case 2:if there is only one elem in free list
+    // if (exp_start->fb.explicit_next == exp_start && exp_start->fb.explicit_prev == exp_start){
+    //     exp_start = NULL;
+    //     return;
+    // }
+    // //Case 3: regular insertion
+    // else{
+    //     //Extra case: if we want to remove the first elem we can just switch pointer
+    //     if (exp_start == block) exp_start = exp_start->fb.explicit_next;
+    //     //normal case of switching pointers: 
+    //     //block->prev->next = block->next
+    //     block->fb.explicit_prev->fb.explicit_next = block->fb.explicit_next;
+    //     //block->next->prev = block->prev
+    //     block->fb.explicit_next->fb.explicit_prev = block->fb.explicit_prev;
+
+    // }
 }
 
 
 static void explicitInsert(block_t *block){
     dbg_requires(block != NULL);
-    dbg_requires(!get_alloc(block));
     dbg_requires(get_size(block) > 0);
+
+
+
+    dbg_printf("explicitInsert: \n");
+    print_heap(__LINE__);
+
+    size_t index = seg_index(get_size(block));
 
     // exp list is empty
     if (exp_start == NULL){
@@ -456,6 +511,22 @@ static void explicitInsert(block_t *block){
         exp_start->fb.explicit_next = block;
         block->fb.explicit_prev = exp_start;
     }
+    seg_list[index] = exp_start;
+
+
+
+    //EXPLICIT LIST IMPLEMENTATION:
+    // // exp list is empty
+    // if (exp_start == NULL){
+    //     block->fb.explicit_prev = block;
+    //     block->fb.explicit_next = block;
+    //     exp_start = block;
+    // } else {
+    //     exp_start->fb.explicit_next->fb.explicit_prev = block;
+    //     block->fb.explicit_next = exp_start->fb.explicit_next;
+    //     exp_start->fb.explicit_next = block;
+    //     block->fb.explicit_prev = exp_start;
+    // }
 }
 
 
@@ -619,22 +690,32 @@ static void split_block(block_t *block, size_t asize) {
 static block_t *find_fit(size_t asize) {
     block_t *block;
 
+    dbg_printf("find_fit access: \n");
+
 
     if (exp_start == NULL) return NULL;
     else if (asize <= get_size(exp_start)) return exp_start;
     
-    // for (block = exp_start; get_size(block) > 0; block = block->fb.explicit_next) {
-    //     dbg_printf("findFit call: \n");
+    //SEGLIST IMPLEMENTATION:
+    //iterate through the seglist and the elements in each index to find fit
+    for (size_t i=0; i < (size_t)seg_size; i++){
+        block_t *indexElem = seg_list[i];
+        
+        for(block = indexElem; block != NULL; block = block->fb.explicit_next){
+            if (asize <= get_size(block) && !get_alloc(block)) {
+                return block;
+            }
+        }
+        
+    }
+
+    //EXPLICIT LIST IMPLEMENTATION
+    // for (block = exp_start->fb.explicit_next; block != exp_start; block = block->fb.explicit_next) {
+    //     //dbg_printf("findFit call: \n");
     //     if (!(get_alloc(block)) && (asize <= get_size(block))) {
     //         return block;
     //     }
     // }
-    for (block = exp_start->fb.explicit_next; block != exp_start; block = block->fb.explicit_next) {
-        //dbg_printf("findFit call: \n");
-        if (!(get_alloc(block)) && (asize <= get_size(block))) {
-            return block;
-        }
-    }
     return NULL; // no fit found
 }
 
@@ -765,11 +846,10 @@ bool mm_init(void) {
         return false;
     }
 
-    /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Think about why we need a heap prologue and epilogue. Why do
-     * they correspond to a block footer and header respectively?
-     */
+    //initializing indexes of seg_list to NULL
+    for (size_t i=0; i < (size_t)seg_size; i++){
+        seg_list[i] = NULL;
+    }
 
     start[0] = pack(0, true); // Heap prologue (block footer)
     start[1] = pack(0, true); // Heap epilogue (block header)
