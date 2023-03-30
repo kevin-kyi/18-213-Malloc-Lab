@@ -83,7 +83,7 @@ static const size_t wsize = sizeof(word_t);
 static const size_t dsize = 2 * wsize;
 
 /** @brief Minimum block size (bytes) */
-static const size_t min_block_size = 2 * dsize;
+static const size_t min_block_size = wsize + dsize;
 
 /**
  * TODO: chunk size is the number you extend heap by
@@ -96,12 +96,16 @@ static const size_t chunksize = (1 << 12);
  */
 static const word_t alloc_mask = 0x1;
 
+
+
 static const word_t prev_alloc_mask = 0x2;
 
 /**
  * TODO: 8 bits we use to determine the size of the block from the header
  */
 static const word_t size_mask = ~(word_t)0xF;
+
+size_t index_ER;
 
 /** @brief Represents the header and payload of one block in the heap */
 typedef struct block {
@@ -122,7 +126,7 @@ typedef struct block {
 /** @brief Pointer to first block in the heap */
 static block_t *heap_start = NULL;
 // static block_t *exp_start = NULL;
-static const size_t seg_size = 14;
+static const size_t seg_size = 10;
 static block_t *seg_list[seg_size];
 
 /*
@@ -177,29 +181,12 @@ static size_t round_up(size_t size, size_t n) {
  * @param[in] alloc True if the block is allocated
  * @return The packed value
  */
-static word_t pack(size_t size, bool alloc) {
+static word_t pack(size_t size, bool alloc, bool prevAlloc) {
     word_t word = size;
-    if (alloc) {
-        word |= alloc_mask;
-    }
+    if (alloc) word |= alloc_mask;
+    
+    if (prevAlloc) word |= prev_alloc_mask;
     return word;
-}
-
-// implementing prev alloc status bits
-static word_t pack_prev_bit(word_t word, bool prevAlloc) {
-    if (prevAlloc)
-        return word | prev_alloc_mask;
-
-    return word & (~prev_alloc_mask);
-}
-
-static bool get_prev_bit(word_t word) {
-    bool prevAllocBit = word & prev_alloc_mask;
-    return prevAllocBit;
-}
-
-static bool get_prev_alloc(block_t *currBlock) {
-    return get_prev_bit(currBlock->header);
 }
 
 /**
@@ -285,7 +272,7 @@ static block_t *footer_to_header(word_t *footer) {
  */
 static size_t get_payload_size(block_t *block) {
     size_t asize = get_size(block);
-    return asize - dsize;
+    return asize - wsize;
 }
 
 /**
@@ -316,12 +303,10 @@ static bool get_alloc(block_t *block) {
  *
  * @param[out] block The location to write the epilogue header
  */
-static void write_epilogue(block_t *block) {
+static void write_epilogue(block_t *block, bool prevAlloc) {
     dbg_requires(block != NULL);
     dbg_requires((char *)block == mem_heap_hi() - 7);
-
-    block->header = pack(0, true);
-    block->header = pack_prev_bit(block->header, get_prev_alloc(block));
+    block->header = pack(0, true, prevAlloc);
 }
 
 /**
@@ -336,15 +321,16 @@ static void write_epilogue(block_t *block) {
  * @param[in] size The size of the new block
  * @param[in] alloc The allocation status of the new block
  */
-static void write_block(block_t *block, size_t size, bool alloc) {
+static void write_block(block_t *block, size_t size, bool alloc, bool prevAlloc) {
     dbg_requires(block != NULL);
     dbg_requires(size > 0);
-    block->header = pack(size, alloc);
-    block->header = pack_prev_bit(block->header, get_prev_alloc(block));
+    block->header = pack(size, alloc, prevAlloc);
 
-    word_t *footerp = header_to_footer(block);
-    *footerp = pack(size, alloc);
-    *footerp = pack_prev_bit(*footerp, get_prev_alloc(block));
+
+    if (!alloc){
+        word_t *footerp = header_to_footer(block);
+        *footerp = pack(size, alloc, prevAlloc);
+    }
 }
 
 /**
@@ -402,43 +388,28 @@ static block_t *find_prev(block_t *block) {
     return footer_to_header(footerp);
 }
 
-// update the alloc bit of the next block
-static void update_next_prev_alloc(block_t *currBlock, bool currAlloc) {
-    // printf("update_next_prev_alloc called \n");
 
-    // dbg_requires(currBlock != NULL);
-    // block_t *nextBlock = find_next(currBlock);
+static void print_heap(int line) {
+    block_t *block;
+    int a;
+    bool b;
+    dbg_printf("\n*************************\n");
+    dbg_printf("\n HEAP PRINT:\n");
+    dbg_printf("=======================\n");
+    for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
+        dbg_printf("=======================\n");
+        dbg_printf("Address: %p : \n", block);
+        a = get_alloc(block) ? 1 : 0;
+        dbg_printf("Allocation status: %d\n", a);
+        dbg_printf("Size: %lu\n", get_size(block));
+        b = block->header & prev_alloc_mask;
+        dbg_printf("Prev_Alloc status: %d\n", b);
 
-    // //dbg_requires(nextBlock != NULL);
-
-    // // set the alloc status of prev block in next block
-
-    // dbg_assert(currAlloc == get_prev_alloc(nextBlock));
-
-    // // block size is larger than min
-    // if (!get_alloc(nextBlock) && get_size(nextBlock) > min_block_size){
-    //     //block is not alloc'd
-
-    //     word_t *footer = header_to_footer(nextBlock);
-
-    //     dbg_assert(nextBlock->header == *footer);
-
-    // }
-    dbg_requires(currBlock != NULL);
-    block_t *next;
-
-    next = find_next(currBlock);
-    next->header = pack_prev_bit(next->header, currAlloc);
-    // for mini blocks
-    if (get_size(currBlock) <= min_block_size) {
-        // less than or equal to 16 bytes
     }
+    dbg_printf("=======================\n");
 
-    if (!get_alloc(next) && get_size(next) > min_block_size) {
-        // if next block is free, we need to update footer too
-        word_t *foot = header_to_footer(next);
-        *foot = pack_prev_bit(*foot, currAlloc);
-    }
+    dbg_printf("\n*************************\n");
+    return;
 }
 
 /*
@@ -464,16 +435,24 @@ size_t seg_index(size_t bSize) {
     return seg_size - 1;
 }
 
+static block_t* doshit(size_t index) {
+    return seg_list[index];
+}
 // Explicit List Implementation Helpers
 static void explicitRemove(block_t *block) {
     // dbg_requires(block != NULL);
     // dbg_requires(!get_alloc(block));
     // dbg_requires(get_size(block) > min_block_size);
 
-    size_t index = seg_index(get_size(block));
+    size_t size = get_size(block);
 
-    if (seg_list[index] == NULL)
-        return;
+    index_ER = seg_index(size);
+    size_t index = index_ER;
+    //print_heap(__LINE__);
+    //lock_t *dummy = doshit(index);
+    // if (seg_list[index] == NULL)
+    //     return;
+    
     if (seg_list[index]->fb.explicit_next == seg_list[index] &&
         seg_list[index]->fb.explicit_prev == seg_list[index]) {
         seg_list[index] = NULL;
@@ -484,6 +463,7 @@ static void explicitRemove(block_t *block) {
         block->fb.explicit_prev->fb.explicit_next = block->fb.explicit_next;
         block->fb.explicit_next->fb.explicit_prev = block->fb.explicit_prev;
     }
+
     // Case 1: root == NULL -> return;
     // Case 2: free list length 1 -> return root = NULL;
     //     root->next == NULL and root->prev == NULL
@@ -517,6 +497,21 @@ static void explicitInsert(block_t *block) {
     }
 }
 
+
+static void update_next_alloc(block_t *block, bool prevAlloc){
+    
+    block_t *nBlock = find_next(block);
+    // get size
+    size_t nBlock_size= get_size(nBlock);
+    // get alloc
+    bool alloc = get_alloc(nBlock);
+    word_t new_header = pack(nBlock_size, alloc, prevAlloc);
+    nBlock->header = new_header;
+
+}
+
+
+
 /**
  * @brief
  *
@@ -547,14 +542,17 @@ static block_t *coalesce_block(block_t *block) {
     size_t leftBlockSize = 0;
     size_t rightBlockSize = 0;
     // check: if first block
-    bool leftAlloc = 1;
+    bool leftAlloc = block->header & prev_alloc_mask;
     bool rightAlloc = get_alloc(find_next(block));
 
-    block_t *pBlock = find_prev(block);
+
+    block_t *pBlock = NULL;
+    if (!leftAlloc) {
+        pBlock = find_prev(block); // should be a value because free
+    }
     block_t *nBlock = find_next(block);
 
-    if (pBlock != NULL)
-        leftAlloc = get_alloc(pBlock);
+
     if (!leftAlloc)
         leftBlockSize = get_size(pBlock);
 
@@ -563,16 +561,16 @@ static block_t *coalesce_block(block_t *block) {
 
     // case 1: |allocated, block to be freed, allocated|
     if (leftAlloc && rightAlloc) {
-        write_block(block, blockSize, false);
-        update_next_prev_alloc(block, false);
+        write_block(block, blockSize, false, true);
+        update_next_alloc(block, false);
         explicitInsert(block);
     }
 
     // case 2: |allocated, block to be freed, free|
     if (leftAlloc && !rightAlloc) {
         explicitRemove(nBlock);
-        write_block(block, (blockSize + rightBlockSize), false);
-        update_next_prev_alloc(block, false);
+        write_block(block, (blockSize + rightBlockSize), false, true);
+        update_next_alloc(block, false);
         explicitInsert(block);
     }
 
@@ -580,8 +578,9 @@ static block_t *coalesce_block(block_t *block) {
 
     if (!leftAlloc && rightAlloc) {
         explicitRemove(pBlock);
-        write_block(pBlock, (leftBlockSize + blockSize), false);
-        update_next_prev_alloc(pBlock, false);
+        bool prev_alloc = pBlock->header & prev_alloc_mask;
+        write_block(pBlock, (leftBlockSize + blockSize), false, prev_alloc);
+        update_next_alloc(pBlock, false);
         explicitInsert(pBlock);
         // print_heap(__LINE__);
 
@@ -592,16 +591,16 @@ static block_t *coalesce_block(block_t *block) {
     if (!leftAlloc && !rightAlloc) {
         explicitRemove(pBlock);
         explicitRemove(nBlock);
+        bool prev_alloc = pBlock->header & prev_alloc_mask;
         write_block(pBlock, (blockSize + leftBlockSize + rightBlockSize),
-                    false);
-        update_next_prev_alloc(pBlock, false);
+                    false, prev_alloc);
+        update_next_alloc(pBlock, false);
         explicitInsert(pBlock);
         // print_heap(__LINE__);
 
         return pBlock;
     }
     // print_heap(__LINE__);
-
     return block;
 }
 
@@ -619,6 +618,8 @@ static block_t *coalesce_block(block_t *block) {
 static block_t *extend_heap(size_t size) {
     void *bp;
 
+    bool prev_alloc = *((word_t *)((char*)mem_heap_hi() - 0x7)) & prev_alloc_mask;
+
     // Allocate an even number of words to maintain alignment
     size = round_up(size, dsize);
     if ((bp = mem_sbrk(size)) == (void *)-1) {
@@ -626,18 +627,21 @@ static block_t *extend_heap(size_t size) {
     }
     // Initialize free block header/footer
     block_t *block = payload_to_header(bp);
-    write_block(block, size, false);
-    update_next_prev_alloc(block, false);
+    write_block(block, size, false, prev_alloc);
 
     // Create new epilogue header
     block_t *block_next = find_next(block);
-    write_epilogue(block_next);
+    write_epilogue(block_next, false);
 
     // Coalesce in case the previous block was free
-    if (block != heap_start && get_alloc(find_prev(block)) != 1) {
-        block = coalesce_block(block);
-    } else
-        explicitInsert(block);
+    // block_t *temp = find_prev(block);
+    // fprintf(temp);
+    // if (block != heap_start && get_alloc(temp) != 1) {
+    //     block = coalesce_block(block);
+    // } else
+    //     explicitInsert(block);
+
+    block = coalesce_block(block);
 
     return block;
 }
@@ -661,15 +665,15 @@ static void split_block(block_t *block, size_t asize) {
 
     if ((block_size - asize) >= min_block_size) {
         block_t *block_next;
-        write_block(block, asize, true);
+
+        bool prev_alloc = block->header & prev_alloc_mask;
+        write_block(block, asize, true, prev_alloc);
         // explicitRemove(block);
         block_next = find_next(block);
-        write_block(block_next, block_size - asize, false);
+        write_block(block_next, block_size - asize, false, true);
 
-        update_next_prev_alloc(block, true);
-        update_next_prev_alloc(block_next, false);
 
-        explicitInsert(block_next);
+        explicitInsert(block_next); 
     }
 
     dbg_ensures(get_alloc(block));
@@ -908,9 +912,9 @@ bool mm_init(void) {
         return false;
     }
 
-    start[0] = pack(0, true); // Heap prologue (block footer)
-    start[1] = pack(0, true); // Heap epilogue (block header)
-    start[1] = pack_prev_bit(start[1], true);
+    start[0] = pack(0, true, true); // Heap prologue (block footer)
+    start[1] = pack(0, true, true); // Heap epilogue (block header)
+
     // Heap starts with first "block header", currently the epilogue
     heap_start = (block_t *)&(start[1]);
     for (size_t i = 0; i < seg_size; i++) {
@@ -957,7 +961,7 @@ void *malloc(size_t size) {
     }
 
     // Adjust block size to include overhead and to meet alignment requirements
-    asize = round_up(size + dsize, dsize);
+    asize = round_up(size + wsize, 2*dsize);
 
     // Search the free list for a fit
     block = find_fit(asize);
@@ -978,14 +982,22 @@ void *malloc(size_t size) {
 
     // Mark block as allocated
     size_t block_size = get_size(block);
-    explicitRemove(block);
-    if (block->fb.explicit_next != NULL)
-        block->fb.explicit_next = NULL;
-    if (block->fb.explicit_prev != NULL)
-        block->fb.explicit_prev = NULL;
 
-    write_block(block, block_size, true);
-    update_next_prev_alloc(block, true);
+
+    // if (block->fb.explicit_next != NULL)
+    //     block->fb.explicit_next = NULL;
+    // if (block->fb.explicit_prev != NULL)
+    //     block->fb.explicit_prev = NULL;
+
+    bool alloc_prev = block->header & prev_alloc_mask;
+    write_block(block, block_size, true, alloc_prev);
+
+        // block_t *nBlock = find_next(block);
+        // nBlock->header = nBlock->header | prev_alloc_mask;
+    update_next_alloc(block, true);
+
+
+    explicitRemove(block);
 
     // Try to split the block if too large
     split_block(block, asize);
@@ -1012,6 +1024,7 @@ void free(void *bp) {
     if (bp == NULL) {
         return;
     }
+    print_heap(__LINE__);
 
     block_t *block = payload_to_header(bp);
     size_t size = get_size(block);
@@ -1020,8 +1033,8 @@ void free(void *bp) {
     dbg_assert(get_alloc(block));
 
     // Mark the block as free
-    write_block(block, size, false);
-    update_next_prev_alloc(block, false);
+    bool alloc_prev = block->header & prev_alloc_mask;
+    write_block(block, size, false, alloc_prev);
 
     // Try to coalesce the block with its neighbors
     block = coalesce_block(block);
@@ -1129,3 +1142,6 @@ void *calloc(size_t elements, size_t size) {
  *                                                                           *
  *****************************************************************************
  */
+
+
+

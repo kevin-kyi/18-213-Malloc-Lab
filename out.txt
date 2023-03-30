@@ -1,0 +1,3 @@
+Found benchmark throughput 8009 for cpu type Intel(R)Xeon(R)CPUE5520@2.27GHz, benchmark regular
+Throughput targets: min=4004, max=7208, benchmark=8009
+Could not open ./traces/bdd-a4 in read_trace: No such file or directory
