@@ -89,7 +89,7 @@ static const size_t min_block_size = wsize + dsize;
  * TODO: chunk size is the number you extend heap by
  * which in this case would be the dSize(has to be divisible by)
  */
-static const size_t chunksize = (1 << 12);
+static const size_t chunksize = (1 << 8);
 
 /**
  * TODO: gives us the status of the alloc bit
@@ -126,7 +126,7 @@ typedef struct block {
 /** @brief Pointer to first block in the heap */
 static block_t *heap_start = NULL;
 // static block_t *exp_start = NULL;
-static const size_t seg_size = 10;
+static const size_t seg_size = 14;
 static block_t *seg_list[seg_size];
 
 /*
@@ -435,9 +435,9 @@ size_t seg_index(size_t bSize) {
     return seg_size - 1;
 }
 
-static block_t* doshit(size_t index) {
-    return seg_list[index];
-}
+
+
+
 // Explicit List Implementation Helpers
 static void explicitRemove(block_t *block) {
     // dbg_requires(block != NULL);
@@ -449,7 +449,6 @@ static void explicitRemove(block_t *block) {
     index_ER = seg_index(size);
     size_t index = index_ER;
     //print_heap(__LINE__);
-    //lock_t *dummy = doshit(index);
     // if (seg_list[index] == NULL)
     //     return;
     
@@ -671,9 +670,16 @@ static void split_block(block_t *block, size_t asize) {
         // explicitRemove(block);
         block_next = find_next(block);
         write_block(block_next, block_size - asize, false, true);
+        update_next_alloc(block_next, false);
 
 
         explicitInsert(block_next); 
+    } else {
+        bool prevAlloc = block->header & prev_alloc_mask;
+        write_block(block, asize, true, prevAlloc);
+        update_next_alloc(block, true);
+
+
     }
 
     dbg_ensures(get_alloc(block));
@@ -711,11 +717,98 @@ static block_t *find_fit_explicit(size_t asize, size_t index) {
     return NULL; // no fit found
 }
 
+// // find_fit: runs explicit list index finder for each index in seg_size
+// static block_t *find_fit(size_t asize) {
+//     block_t *block;
+//     size_t index = seg_index(asize);
+//     for (size_t i = index; i < seg_size; i++) {
+//         block = find_fit_explicit(asize, i);
+//         if (block != NULL) {
+//             return block;
+//         }
+//     }
+//     return NULL;
+// }
+
+
+// static block_t *best_fit(size_t minSize, size_t index){
+//     //size_t difference = seg_size - index;
+//     block_t *bestFit = NULL;
+//     block_t *exp_start = seg_list[index];
+//     size_t difference = seg_size - index;
+//     size_t smallestSize = minSize + 1000000;
+
+//     if (exp_start == NULL) return NULL;
+//     else if (minSize <= get_size(exp_start)) return exp_start;
+//     // else {
+//     if (difference >= 2){
+//         for (size_t i = index; i <= index + 1; i++){
+
+//             if (seg_list[i] != NULL) exp_start = seg_list[i];
+//             if (seg_list[i] == NULL) return bestFit;
+
+//             for (block_t *block = exp_start->fb.explicit_next; block != exp_start; 
+//                         block = block->fb.explicit_next){
+//                 if(smallestSize > get_size(block) && get_size(block) >= minSize){
+//                     bestFit = block;
+//                     smallestSize = get_size(block);
+                    
+//                 } 
+//             }
+//         }
+//     } else {
+//         for (block_t *block = exp_start->fb.explicit_next; block != exp_start; 
+//                         block = block->fb.explicit_next){
+//             if(smallestSize > get_size(block) && get_size(block) >= minSize){
+//                 bestFit = block;
+//                 smallestSize = get_size(block);
+                
+                
+//             } 
+//         }
+//     }
+    
+
+//     return bestFit;
+// }
+
+
+
+
+// static block_t *best_fit(size_t asize, size_t index) {
+//     block_t *smallestBlock = NULL;
+//     block_t *exp_start = seg_list[index];
+//     size_t smallSize = asize + 999999999;
+//     // printf("MADE IT TO EXPLICIT FIND FGIT");
+
+//     if (exp_start == NULL)
+//         return NULL;
+//     else if (asize <= get_size(exp_start))
+//         return exp_start;
+//     else {
+//         for (block_t *block = exp_start->fb.explicit_next; block != exp_start;
+//              block = block->fb.explicit_next) {
+//             if ((asize <= get_size(block)) && smallSize > get_size(block) && !get_alloc(block)) {
+//                 smallSize = get_size(block);
+//                 smallestBlock = block;
+//             }
+//         }
+//     }
+//     return NULL; // no fit found
+// }
+
+
+
+
+
+
 // find_fit: runs explicit list index finder for each index in seg_size
 static block_t *find_fit(size_t asize) {
     block_t *block;
     size_t index = seg_index(asize);
     for (size_t i = index; i < seg_size; i++) {
+        // block = find_fit_explicit(asize, i);
+        // block = best_fit(asize, i);
         block = find_fit_explicit(asize, i);
         if (block != NULL) {
             return block;
@@ -723,6 +816,12 @@ static block_t *find_fit(size_t asize) {
     }
     return NULL;
 }
+
+
+
+
+
+
 
 /**
  * @brief
@@ -1024,7 +1123,7 @@ void free(void *bp) {
     if (bp == NULL) {
         return;
     }
-    print_heap(__LINE__);
+    //print_heap(__LINE__);
 
     block_t *block = payload_to_header(bp);
     size_t size = get_size(block);
